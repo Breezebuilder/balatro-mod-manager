@@ -1,31 +1,44 @@
-![Balatro Mod Manager](images/title.svg)
+# [![Balatro Mod Manager](images/title.svg)](#)
 
 The Balatro Mod Manager by _Skyline_.
 
-## Star History
-
-<a href="https://star-history.com/#skyline69/balatro-mod-manager&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
- </picture>
-</a>
+Balatro Mod Manager is a standalone tool made for [Balatro](https://store.steampowered.com/app/2379780/Balatro/) that makes finding, downloading, and installing mods easy.
 
 
-# Startup Screen
-![first cover](images/cover_1.png)
+<p align="center">
+    <img width="49%" alt="Home screen" src="images/cover_1.png"/>
+    &nbsp;
+    <img width="49%" alt="Start screen" src="images/cover_2.png"/>
+</p>
 
-# Home Screen
-![second cover](images/cover_2.png)
+<p align="center">
+    <a href="https://star-history.com/#skyline69/balatro-mod-manager&Date">
+        <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date&theme=dark" />
+            <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
+            <img width="75%" alt="Star History Chart" src="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
+        </picture>
+    </a>
+</p>
 
 
-![Installation](images/Installation.svg)
+# [![Download](images/download.svg)](https://github.com/skyline69/balatro-mod-manager/releases/latest)
 
-## Prebuilt Binaries
-You can checkout the prebuilt binaries [here.](https://github.com/skyline69/balatro-mod-manager/releases/latest)
+Balatro Mod Manager is currently available for Windows and macOS. The installer is standalone and does not require any external libraries.
 
-## Prerequisites
+[Download the Balatro Mod Manager installer here](https://github.com/skyline69/balatro-mod-manager/releases/latest).
+
+Scroll down to find **▸Assets** and download the right version of the installer for your system.
+- Windows: `Balatro.Mod.Manager_…_x64-setup.exe` or `Balatro.Mod.Manager_…_x64_en-US.msi`
+- macOS: `Balatro.Mod.Manager_…_universal.dmg`
+
+
+# [![Build](images/build.svg)](#build-prerequisites)
+
+Alternatively, if you would prefer to build Balatro Mod Manager yourself instead of downloading the [prebuilt installer](https://github.com/skyline69/balatro-mod-manager/releases/latest), Balatro Mod Manager can be compiled from source using the instructions below.
+
+
+## Build Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (for the backend)
 - [Deno](https://deno.land/#installation) (for the frontend)
