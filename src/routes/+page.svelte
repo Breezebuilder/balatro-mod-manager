@@ -98,16 +98,10 @@
 <div class="app">
 	<h1>Welcome to Balatro Mod Manager</h1>
 	<BalatroPicker />
-	<div class="version-text">v0.1.4</div>
+	<div class="version-text">v0.1.7</div>
 </div>
 
 <style>
-	@font-face {
-		font-family: "M6X11";
-		src: url("/fonts/m6x11plus.ttf") format("truetype");
-		font-display: swap;
-	}
-
 	.night-sky {
 		width: 100vw;
 		height: 100vh;

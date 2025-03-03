@@ -2,19 +2,17 @@
 	import {
 		Download,
 		Flame,
-		Clock,
+		// Clock,
 		Star,
 		Spade,
 		Gamepad2,
 		LayoutDashboard,
 		FolderHeart,
-		Trash2,
 		Search,
 		BookOpen,
 	} from "lucide-svelte";
 	import ModView from "./ModView.svelte";
 	import { fly } from "svelte/transition";
-	import { tick } from "svelte";
 	import {
 		SortOption,
 		backgroundEnabled,
@@ -37,12 +35,12 @@
 	import type { InstalledMod } from "../../stores/modStore";
 	import { open } from "@tauri-apps/plugin-shell";
 	import { invoke } from "@tauri-apps/api/core";
-	import { stripMarkdown, truncateText } from "../../utils/helpers";
 	import SearchView from "./SearchView.svelte";
 	import { onMount } from "svelte";
 	import { writable } from "svelte/store";
 	import { addMessage } from "$lib/stores";
 	import { currentPage, itemsPerPage } from "../../stores/modStore";
+	import ModCard from "./ModCard.svelte";
 
 	const loadingDots = writable(0);
 
@@ -60,20 +58,19 @@
 		};
 	});
 
-	let mods: Mod[] = [];
+	// let mods: Mod[] = [];
 	let isLoading = true;
-
 	interface DependencyCheck {
 		steamodded: boolean;
 		talisman: boolean;
 	}
 
 	export let handleDependencyCheck: (requirements: DependencyCheck) => void;
-	function onDependencyCheck(
-		event: CustomEvent<{ steamodded: boolean; talisman: boolean }>,
-	) {
-		handleDependencyCheck(event.detail);
-	}
+	// function onDependencyCheck(
+	// 	event: CustomEvent<{ steamodded: boolean; talisman: boolean }>,
+	// ) {
+	// 	handleDependencyCheck(event.detail);
+	// }
 
 	export let mod: Mod | null;
 
@@ -91,20 +88,26 @@
 
 	onMount(() => {
 		const initialize = async () => {
-			if ($modsStore.length === 0) {
+			const cached = await getFromCache();
+			if (
+				cached &&
+				Date.now() - cached.timestamp * 1000 < CACHE_DURATION
+			) {
+				modsStore.set(cached.mods);
+				isLoading = false;
+			} else {
 				try {
 					isLoading = true;
-					mods = await fetchModDirectories();
-					// Handle installation status updates
+					const freshMods = await fetchModDirectories();
+					modsStore.set(freshMods);
 				} finally {
 					isLoading = false;
 				}
 			}
+
 			try {
-				isLoading = true;
-				mods = await fetchModDirectories();
 				await Promise.all(
-					mods.map(async (mod) => {
+					$modsStore.map(async (mod) => {
 						const status = await isModInstalled(mod);
 						installationStatus.update((s) => ({
 							...s,
@@ -112,20 +115,12 @@
 						}));
 					}),
 				);
-
-				isLoading = false;
 			} catch (error) {
-				console.error("Failed to get modloader:", error);
-				isLoading = false;
+				console.error("Install status check failed:", error);
 			}
 		};
 
 		initialize();
-
-		// Return synchronous cleanup function
-		return () => {
-			// Cleanup code here if needed
-		};
 	});
 
 	const getAllInstalledMods = async () => {
@@ -154,19 +149,18 @@
 		try {
 			await getAllInstalledMods();
 			const installedMod = installedMods.find(
-				(m) => m.name === mod.title,
+				(m) => m.name.toLowerCase() === mod.title.toLowerCase(),
 			);
+
 			if (!installedMod) return;
 
 			if (isCoreMod) {
-				// Get fresh dependencies list
+				// Get dependents
 				const dependents = await invoke<string[]>("get_dependents", {
 					modName: mod.title,
 				});
 
-				// Force UI update before showing dialog
-				await tick();
-
+				// Set the dialog properties directly
 				uninstallDialogStore.set({
 					show: true,
 					modName: mod.title,
@@ -174,7 +168,7 @@
 					dependents,
 				});
 			} else {
-				// Immediate uninstall for normal mods
+				// For non-core mods
 				await invoke("remove_installed_mod", {
 					name: mod.title,
 					path: installedMod.path,
@@ -186,78 +180,75 @@
 			}
 		} catch (error) {
 			console.error("Uninstall failed:", error);
+			addMessage(`Uninstall failed: ${error}`, "error");
 		}
 	};
+
 	const installMod = async (mod: Mod) => {
 		if (!mod?.title || !mod?.downloadURL) return;
-
-		// Collect dependencies first
-		const dependencies = [];
-		if (mod.requires_steamodded) dependencies.push("Steamodded");
-		if (mod.requires_talisman) dependencies.push("Talisman");
-
-		// Existing dependency check logic
-		if (mod.requires_steamodded || mod.requires_talisman) {
-			const steamoddedInstalled = mod.requires_steamodded
-				? await invoke<boolean>("check_mod_installation", {
-						modType: "Steamodded",
-					})
-				: true;
-			const talismanInstalled = mod.requires_talisman
-				? await invoke<boolean>("check_mod_installation", {
-						modType: "Talisman",
-					})
-				: true;
-
-			if (!steamoddedInstalled || !talismanInstalled) {
-				handleDependencyCheck({
-					steamodded: mod.requires_steamodded && !steamoddedInstalled,
-					talisman: mod.requires_talisman && !talismanInstalled,
-				});
-				return;
-			}
-		}
-
 		try {
+			// Check for dependencies
+			if (mod.requires_steamodded || mod.requires_talisman) {
+				// Check Steamodded if required
+				const steamoddedInstalled = mod.requires_steamodded
+					? await invoke<boolean>("check_mod_installation", {
+							modType: "Steamodded",
+						})
+					: true;
+
+				// Check Talisman if required
+				const talismanInstalled = mod.requires_talisman
+					? await invoke<boolean>("check_mod_installation", {
+							modType: "Talisman",
+						})
+					: true;
+
+				// If any dependency is missing, show the RequiresPopup
+				if (
+					(mod.requires_steamodded && !steamoddedInstalled) ||
+					(mod.requires_talisman && !talismanInstalled)
+				) {
+					// Call the handler with the appropriate requirements
+					const requirements = {
+						steamodded:
+							mod.requires_steamodded && !steamoddedInstalled,
+						talisman: mod.requires_talisman && !talismanInstalled,
+					};
+					handleDependencyCheck(requirements);
+					return; // Stop installation
+				}
+			}
+
+			// Proceed with installation
 			loadingStates.update((s) => ({ ...s, [mod.title]: true }));
-			let installedPath = await invoke<string>("install_mod", {
+
+			// Create dependencies array for the database
+			const dependencies = [];
+			if (mod.requires_steamodded) dependencies.push("Steamodded");
+			if (mod.requires_talisman) dependencies.push("Talisman");
+
+			const installedPath = await invoke<string>("install_mod", {
 				url: mod.downloadURL,
 			});
-			// if (mod.title.toLowerCase() == "talisman") {
-			// 	installedPath = installedPath += "Talisman";
-			// }
-			//
-			const pathExists = await invoke("verify_path_exists", {
-				path: installedPath,
-			});
-			if (!pathExists) {
-				throw new Error(
-					"Installation failed - files not found at destination",
-				);
-			}
-
-			// Determine dependencies based on mod type
-			let modDependencies = dependencies;
-			if (mod.title.toLowerCase() === "steamodded") {
-				modDependencies = [];
-			} else if (mod.title.toLowerCase() === "talisman") {
-				modDependencies = [];
-			}
 
 			await invoke("add_installed_mod", {
 				name: mod.title,
 				path: installedPath,
-				dependencies: dependencies,
+				dependencies,
 			});
 
-			await getAllInstalledMods();
 			installationStatus.update((s) => ({ ...s, [mod.title]: true }));
 		} catch (error) {
 			console.error("Failed to install mod:", error);
+			addMessage(
+				`Installation failed: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
 		} finally {
 			loadingStates.update((s) => ({ ...s, [mod.title]: false }));
 		}
 	};
+
 	const isModInstalled = async (mod: Mod) => {
 		if (!mod?.title) return false;
 		await getAllInstalledMods();
@@ -301,153 +292,115 @@
 		}
 	}
 
-	async function checkImageExists(imageUrl: string): Promise<string> {
-		try {
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 5000);
+	//
+	// async function getLastUpdated(repoUrl: string): Promise<string> {
+	// 	try {
+	// 		const [owner, repo] = repoUrl
+	// 			.replace("https://github.com/", "")
+	// 			.split("/");
+	//
+	// 		if (!owner || !repo) {
+	// 			return "Unknown";
+	// 		}
+	//
+	// 		const response = await fetch(
+	// 			`https://api.github.com/repos/${owner}/${repo}/commits/main`,
+	// 		);
+	//
+	// 		if (!response.ok) {
+	// 			return "Unknown";
+	// 		}
+	//
+	// 		const data = await response.json();
+	// 		if (!data?.commit?.committer?.date) {
+	// 			return "Unknown";
+	// 		}
+	//
+	// 		const commitDate = new Date(data.commit.committer.date);
+	// 		const currentDate = new Date();
+	// 		const diffTime = Math.abs(
+	// 			currentDate.getTime() - commitDate.getTime(),
+	// 		);
+	// 		const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+	//
+	// 		if (diffDays === 0) return "Today";
+	// 		if (diffDays === 1) return "Yesterday";
+	// 		if (diffDays < 7) return `${diffDays} days ago`;
+	// 		if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+	// 		if (diffDays < 365)
+	// 			return `${Math.floor(diffDays / 30)} months ago`;
+	// 		return `${Math.floor(diffDays / 365)} years ago`;
+	// 	} catch (error) {
+	// 		console.error("Failed to fetch last commit date:", error);
+	// 		return "Unknown";
+	// 	}
+	// }
 
-			const response = await fetch(imageUrl, {
-				method: "HEAD",
-				signal: controller.signal,
-				// Suppress console errors
-				credentials: "omit",
-			});
-
-			clearTimeout(timeoutId);
-			return response.ok ? imageUrl : "images/cover.jpg";
-		} catch {
-			return "images/cover.jpg";
-		}
-	}
-
-	async function getLastUpdated(repoUrl: string): Promise<string> {
-		try {
-			const [owner, repo] = repoUrl
-				.replace("https://github.com/", "")
-				.split("/");
-
-			if (!owner || !repo) {
-				return "Unknown";
-			}
-
-			const response = await fetch(
-				`https://api.github.com/repos/${owner}/${repo}/commits/main`,
-			);
-
-			if (!response.ok) {
-				return "Unknown";
-			}
-
-			const data = await response.json();
-			if (!data?.commit?.committer?.date) {
-				return "Unknown";
-			}
-
-			const commitDate = new Date(data.commit.committer.date);
-			const currentDate = new Date();
-			const diffTime = Math.abs(
-				currentDate.getTime() - commitDate.getTime(),
-			);
-			const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-			if (diffDays === 0) return "Today";
-			if (diffDays === 1) return "Yesterday";
-			if (diffDays < 7) return `${diffDays} days ago`;
-			if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-			if (diffDays < 365)
-				return `${Math.floor(diffDays / 30)} months ago`;
-			return `${Math.floor(diffDays / 365)} years ago`;
-		} catch (error) {
-			console.error("Failed to fetch last commit date:", error);
-			return "Unknown";
-		}
-	}
-
-	async function fetchModDirectories() {
+	async function fetchModDirectories(): Promise<Mod[]> {
 		try {
 			isLoading = true;
+			const repoPath = await cloneOrUpdateRepo();
+			if (!repoPath) return [];
 
-			// Check cache with proper await
-			const cached = await getFromCache();
+			const modDirs = await invoke<string[]>("list_directories", {
+				path: `${repoPath}/mods`,
+			});
 
-			if (
-				cached &&
-				Date.now() - cached.timestamp * 1000 < CACHE_DURATION
-			) {
-				modsStore.set(cached.mods);
-				return cached.mods;
-			}
+			// const timestamps = await invoke<Record<string, number>>(
+			// 	"get_mod_timestamps",
+			// 	{
+			// 		repoPath: repoPath,
+			// 	},
+			// );
 
-			const response = await fetch(
-				"https://api.github.com/repos/skyline69/balatro-mod-index/contents/mods",
-			);
-			if (!response.ok) {
-				throw new Error(`GitHub API returned ${response.status}`);
-			}
-
-			const directories = await response.json();
-
-			// Process mods with null filtering
 			const mods = (
 				await Promise.all(
-					directories.map(async (dir: any) => {
+					modDirs.map(async (dirName) => {
 						try {
-							const [metaResponse, descResponse] =
-								await Promise.all([
-									fetch(
-										`https://raw.githubusercontent.com/skyline69/balatro-mod-index/main/mods/${dir.name}/meta.json`,
-									),
-									fetch(
-										`https://raw.githubusercontent.com/skyline69/balatro-mod-index/main/mods/${dir.name}/description.md`,
-									),
-								]);
+							const [meta, description] = await Promise.all([
+								invoke<ModMeta>("read_json_file", {
+									path: `${repoPath}/mods/${dirName}/meta.json`,
+								}),
+								invoke<string>("read_text_file", {
+									path: `${repoPath}/mods/${dirName}/description.md`,
+								}),
+							]);
 
-							if (!metaResponse.ok || !descResponse.ok) {
-								throw new Error("Failed to fetch mod data");
-							}
+							const imageData: string | undefined =
+								await invoke<string>("get_mod_thumbnail", {
+									modPath: dirName,
+								});
 
-							const meta: ModMeta = await metaResponse.json();
-							const description = await descResponse.text();
+							// const lastUpdated =
+							// 	timestamps[dirName] || Date.now();
 
-							// Handle last updated date
-							let lastUpdated = "Unknown";
-							try {
-								lastUpdated = await getLastUpdated(meta.repo);
-							} catch {
-								console.log(
-									`Failed to fetch last updated for ${meta.title}`,
-								);
-							}
+							// Log category mapping for debugging
 
-							// Check image existence
-							const imageUrl = await checkImageExists(
-								`https://raw.githubusercontent.com/skyline69/balatro-mod-index/main/mods/${dir.name}/thumbnail.jpg`,
-							);
-
-							// Convert categories to enum values with validation
-
-							const categories = meta.categories
-								.map((cat) => categoryMap[cat])
-								.filter((c): c is Category => c !== undefined);
+							// Ensure categories are properly mapped
+							const mappedCategories = meta.categories
+								.map((cat) => {
+									return categoryMap[cat] ?? null;
+								})
+								.filter((cat): cat is Category => cat !== null);
 
 							return {
 								title: meta.title,
 								description,
-								image: imageUrl,
-								lastUpdated,
-								categories,
+								image: imageData || "images/cover.jpg",
+								// lastUpdated: lastUpdated.toString(),
 								colors: getRandomColorPair(),
-								installed: false,
+								categories: mappedCategories,
 								requires_steamodded:
 									meta["requires-steamodded"],
 								requires_talisman: meta["requires-talisman"],
 								publisher: meta.author,
 								repo: meta.repo,
-								downloadURL: meta.downloadURL,
-							};
+								downloadURL: meta.downloadURL || "",
+								installed: false,
+							} as Mod;
 						} catch (error) {
 							console.error(
-								`Failed to process mod ${dir.name}:`,
+								`Failed to process mod ${dirName}:`,
 								error,
 							);
 							return null;
@@ -457,13 +410,39 @@
 			).filter((mod): mod is Mod => mod !== null);
 
 			await saveToCache(mods);
-			modsStore.set(mods);
 			return mods;
 		} catch (error) {
 			console.error("Failed to fetch mods:", error);
 			return [];
 		} finally {
 			isLoading = false;
+		}
+	}
+
+	async function cloneOrUpdateRepo() {
+		try {
+			const repoPath = await invoke<string>("get_repo_path");
+			const exists = await invoke<boolean>("path_exists", {
+				path: repoPath,
+			});
+
+			if (!exists) {
+				await invoke("clone_repo", {
+					url: "https://github.com/skyline69/balatro-mod-index.git",
+					path: repoPath,
+				});
+			} else {
+				const lastFetched = await invoke<number>("get_last_fetched");
+				if (Date.now() - lastFetched > 3600 * 1000) {
+					// 1 hour
+					await invoke("pull_repo", { path: repoPath });
+					await invoke("update_last_fetched");
+				}
+			}
+			return repoPath;
+		} catch (error) {
+			console.error("Repo management failed:", error);
+			return null;
 		}
 	}
 	const categories = [
@@ -495,12 +474,21 @@
 
 	const categoryMap: Record<string, Category> = {
 		Content: Category.Content,
+		content: Category.Content,
 		Joker: Category.Joker,
+		joker: Category.Joker,
 		"Quality of Life": Category.QualityOfLife,
+		"quality of life": Category.QualityOfLife,
 		Technical: Category.Technical,
+		technical: Category.Technical,
 		Miscellaneous: Category.Miscellaneous,
+		miscellaneous: Category.Miscellaneous,
 		"Resource Packs": Category.ResourcePacks,
+		"resource packs": Category.ResourcePacks,
+		Resources: Category.ResourcePacks,
+		resources: Category.ResourcePacks,
 		API: Category.API,
+		api: Category.API,
 	};
 
 	function getRandomColorPair() {
@@ -519,19 +507,43 @@
 	$: filteredMods = $modsStore.filter((mod) => {
 		switch ($currentCategory) {
 			case "Content":
-				return mod.categories.includes(Category.Content);
+				return (
+					mod.categories.includes(Category.Content) ||
+					mod.categories.some((cat) => cat === 0) || // Assuming Content is enum value 0
+					mod.title.toLowerCase().includes("content") ||
+					(typeof mod.description === "string" &&
+						mod.description.toLowerCase().includes("new content"))
+				);
 			case "Joker":
-				return mod.categories.includes(Category.Joker);
+				return (
+					mod.categories.includes(Category.Joker) ||
+					mod.categories.some((cat) => cat === 1)
+				);
 			case "Quality of Life":
-				return mod.categories.includes(Category.QualityOfLife);
+				return (
+					mod.categories.includes(Category.QualityOfLife) ||
+					mod.categories.some((cat) => cat === 2)
+				);
 			case "Technical":
-				return mod.categories.includes(Category.Technical);
+				return (
+					mod.categories.includes(Category.Technical) ||
+					mod.categories.some((cat) => cat === 3)
+				);
 			case "Resource Packs":
-				return mod.categories.includes(Category.ResourcePacks);
+				return (
+					mod.categories.includes(Category.ResourcePacks) ||
+					mod.categories.some((cat) => cat === 5)
+				);
 			case "API":
-				return mod.categories.includes(Category.API);
+				return (
+					mod.categories.includes(Category.API) ||
+					mod.categories.some((cat) => cat === 6)
+				);
 			case "Miscellaneous":
-				return mod.categories.includes(Category.Miscellaneous);
+				return (
+					mod.categories.includes(Category.Miscellaneous) ||
+					mod.categories.some((cat) => cat === 4)
+				);
 			case "Installed Mods":
 				return $installationStatus[mod.title];
 			default:
@@ -562,10 +574,10 @@
 					return a.title.localeCompare(b.title);
 				case SortOption.NameDesc:
 					return b.title.localeCompare(a.title);
-				case SortOption.LastUpdatedAsc:
-					return a.lastUpdated.localeCompare(b.lastUpdated);
-				case SortOption.LastUpdatedDesc:
-					return b.lastUpdated.localeCompare(a.lastUpdated);
+				// case SortOption.LastUpdatedAsc:
+				// 	return a.lastUpdated.localeCompare(b.lastUpdated);
+				// case SortOption.LastUpdatedDesc:
+				// 	return b.lastUpdated.localeCompare(a.lastUpdated);
 				default:
 					return 0;
 			}
@@ -626,155 +638,135 @@
 		currentPage.set(page);
 		updatePaginationWindow();
 	}
+
+	// For CSS later
+	// .tags {
+	// 	position: absolute;
+	// 	top: 7.2rem; /* Adjusted top position */
+	// 	right: 0.35rem; /* Adjusted right position */
+	// 	display: flex;
+	// 	gap: 0.5rem;
+	// }
+	// .tag :global(svg) {
+	// 	position: relative;
+	// 	top: -1px; /* Adds subtle upward adjustment to the icons */
+	// }
+	//
+	// .tag {
+	// 	display: flex;
+	// 	align-items: center;
+	// 	position: relative;
+	// 	gap: 0.2rem;
+	// 	padding: 0.15rem 0.3rem;
+	// 	background: rgba(0, 0, 0, 0.7);
+	// 	border-radius: 4px;
+	// 	font-size: 0.9rem;
+	// 	color: #f4eee0;
+	// }
 </script>
 
-<div class="mods-container">
-	<div class="categories">
-		{#each categories as category}
-			<button
-				class:active={$currentCategory === category.name}
-				on:click={() => handleCategoryClick(category.name)}
-			>
-				<svelte:component this={category.icon} size={16} />
-				{category.name}
-			</button>
-		{/each}
-	</div>
-
-	<div class="separator"></div>
-
-	{#if isLoading}
-		<div class="loading-container">
-			<p class="loading-text">Loading mods{".".repeat($loadingDots)}</p>
-		</div>
-	{:else if showSearch}
-		<SearchView />
-	{:else}
-		<div class="mods-wrapper">
-			<div class="controls-container">
-				<div
-					class="pagination-controls"
-					in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
+<div class="container default-scrollbar">
+	<div class="mods-container">
+		<div class="categories">
+			{#each categories as category}
+				<button
+					class:active={$currentCategory === category.name}
+					onclick={() => handleCategoryClick(category.name)}
 				>
-					<button
-						on:click={previousPage}
-						disabled={$currentPage === 1}
-					>
-						Previous
-					</button>
-
-					{#each Array(Math.min(maxVisiblePages, totalPages)) as _, i}
-						{#if startPage + i <= totalPages}
-							<button
-								class:active={$currentPage === startPage + i}
-								on:click={() => goToPage(startPage + i)}
-							>
-								{startPage + i}
-							</button>
-						{/if}
-					{/each}
-					<button
-						on:click={nextPage}
-						disabled={$currentPage === totalPages}
-					>
-						Next
-					</button>
-				</div>
-				<div class="sort-controls">
-					<div class="sort-wrapper">
-						<ArrowUpDown size={16} />
-						<select
-							value={$currentSort}
-							on:change={handleSortChange}
-						>
-							<option value={SortOption.NameAsc}
-								>Name (A-Z)</option
-							>
-							<option value={SortOption.NameDesc}
-								>Name (Z-A)</option
-							>
-							<option value={SortOption.LastUpdatedDesc}
-								>Latest Updated</option
-							>
-							<option value={SortOption.LastUpdatedAsc}
-								>Oldest Updated</option
-							>
-						</select>
-					</div>
-				</div>
+					<svelte:component this={category.icon} size={16} />
+					{category.name}
+				</button>
+			{/each}
+		</div>
+	
+		<div class="separator"></div>
+	
+		{#if isLoading}
+			<div class="loading-container">
+				<p class="loading-text">Loading mods{".".repeat($loadingDots)}</p>
 			</div>
-			<div class="mods-grid">
-				{#each paginatedMods as mod}
-					<div
-						class="mod-card"
-						style="--orig-color1: {mod.colors
-							.color1}; --orig-color2: {mod.colors.color2};"
-						on:click={() => handleModClick(mod)}
-						on:keydown={(e) =>
-							e.key === "Enter" && handleModClick(mod)}
-						role="button"
-						tabindex="0"
+		{:else if showSearch}
+			<SearchView onCheckDependencies={handleDependencyCheck} />
+		{:else}
+			<div class="mods-wrapper">
+				<div class="controls-container">
+					<div 
+						class="pagination-controls"
+						in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
 					>
-						<div class="mod-image">
-							<img
-								src={mod.image}
-								alt={mod.title}
-								draggable="false"
-							/>
-							<div class="tags">
-								<span class="tag updated">
-									<Clock size={13} />
-									{mod.lastUpdated}
-								</span>
-							</div>
-						</div>
-						<div class="mod-info">
-							<h3>{mod.title}</h3>
-							<p>
-								{truncateText(stripMarkdown(mod.description))}
-							</p>
-						</div>
-						<div class="button-container">
-							<button
-								class="download-button"
-								class:installed={$installationStatus[mod.title]}
-								disabled={$installationStatus[mod.title] ||
-									$loadingStates[mod.title]}
-								on:click|stopPropagation={() => installMod(mod)}
-							>
-								{#if $loadingStates[mod.title]}
-									<div class="spinner"></div>
-								{:else}
-									<Download size={16} />
-									{$installationStatus[mod.title]
-										? "Installed"
-										: "Download"}
-								{/if}
-							</button>
-
-							{#if $installationStatus[mod.title]}
+						<button
+							onclick={previousPage}
+							disabled={$currentPage === 1}
+						>
+							Previous
+						</button>
+	
+						{#each Array(Math.min(maxVisiblePages, totalPages)) as _, i}
+							{#if startPage + i <= totalPages}
 								<button
-									class="delete-button"
-									on:click|stopPropagation={() =>
-										uninstallMod(mod)}
+									class:active={$currentPage === startPage + i}
+									onclick={() => goToPage(startPage + i)}
 								>
-									<Trash2 size={16} />
+									{startPage + i}
 								</button>
 							{/if}
+						{/each}
+						<button
+							onclick={nextPage}
+							disabled={$currentPage === totalPages}
+						>
+							Next
+						</button>
+					</div>
+					<div class="sort-controls" in:fly={{ duration: 400, y: 10, opacity: 0.2 }}>
+						<div class="sort-wrapper">
+							<ArrowUpDown size={16} />
+							<select
+								value={$currentSort}
+								onchange={handleSortChange}
+							>
+								<option value={SortOption.NameAsc}
+									>Name (A-Z)</option
+								>
+								<option value={SortOption.NameDesc}
+									>Name (Z-A)</option
+								>
+								<!-- <option value={SortOption.LastUpdatedDesc} -->
+								<!-- 	>Latest Updated</option -->
+								<!-- > -->
+								<!-- <option value={SortOption.LastUpdatedAsc} -->
+								<!-- 	>Oldest Updated</option -->
+								<!-- > -->
+							</select>
 						</div>
 					</div>
-				{/each}
+				</div>
+				<div class="mods-scroll-container default-scrollbar">
+					<div class="mods-grid">
+						{#each paginatedMods as mod}
+							<ModCard {mod} onmodclick={handleModClick} oninstallclick={installMod} onuninstallclick={uninstallMod} />
+						{/each}
+					</div>
+				</div>
 			</div>
-		</div>
+		{/if}
+	</div>
+	
+	{#if $currentModView}
+		<ModView
+			mod={$currentModView!}
+			onCheckDependencies={handleDependencyCheck}
+		/>
 	{/if}
 </div>
-
-<ModView mod={$currentModView!} on:checkDependencies={onDependencyCheck} />
 
 <style>
 	.mods-container {
 		display: flex;
 		gap: 1rem;
+		padding: 0 2rem;
+		overflow: hidden;
+
 		height: 100%;
 	}
 
@@ -786,7 +778,7 @@
 
 	.pagination-controls {
 		position: absolute;
-		top: 0.05rem;
+		/* top: 0.05rem; */
 		left: 50%;
 		transform: translateX(-50%);
 		z-index: 1000;
@@ -827,11 +819,13 @@
 	}
 
 	.controls-container {
+		height: 75px;
+		width: 100%;
 		display: flex;
+		position: absolute;
 		justify-content: space-between;
 		align-items: center;
 		margin-bottom: 1rem;
-		padding: 0 1rem;
 	}
 
 	.categories {
@@ -840,6 +834,7 @@
 		flex-direction: column;
 		gap: 0.5rem;
 		overflow-y: auto;
+		padding: 2rem 0;
 
 		&::-webkit-scrollbar {
 			width: 10px;
@@ -893,71 +888,25 @@
 		color: #393646;
 	}
 
+	.mods-scroll-container {
+		overflow-y: auto;
+		height: 100%;
+	}
+	
 	.mods-grid {
-		height: 95%;
+		padding: 2rem;
+		padding-top: 5rem;
 		flex: 1;
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 		gap: 30px;
-		overflow-y: auto;
-
-		&::-webkit-scrollbar {
-			width: 10px;
-		}
-
-		&::-webkit-scrollbar-track {
-			background: transparent;
-			border-radius: 15px;
-		}
-
-		&::-webkit-scrollbar-thumb {
-			background: #f4eee0;
-			border: 2px solid rgba(193, 65, 57, 0.8);
-			border-radius: 15px;
-		}
-		&::-webkit-scrollbar:horizontal {
-			display: none;
-		}
-		&::-webkit-scrollbar-corner {
-			background-color: transparent;
-		}
-
-		/* scrollbar-width: 0; */
-		/* scrollbar-color: transparent transparent; */
 	}
 
-	.mod-card {
-		--bg-color: var(--orig-color1, #4f6367);
-		--bg-color-2: var(--orig-color2, #334461);
-
-		display: flex;
-		flex-direction: column;
-		position: relative;
-		border-radius: 8px;
-		overflow: hidden;
-		border: 2px solid #f4eee0;
-		width: 300px;
-		height: 330px;
-		margin: 0 auto;
-		padding: 1rem;
-		box-sizing: border-box;
-		cursor: pointer;
-		background-size: 100% 200%;
-		transition: all 0.3s ease;
-		/* Remove the duplicate background property and keep only this one */
-		background-image: repeating-linear-gradient(
-			-45deg,
-			var(--bg-color),
-			var(--bg-color) 10px,
-			var(--bg-color-2) 10px,
-			var(--bg-color-2) 20px
-		);
-	}
 
 	.sort-controls {
 		position: absolute;
-		top: 0.25rem; /* Increased from 2rem */
-		right: 1rem; /* Increased from 2.5rem */
+		/* top: 0.25rem; Increased from 2rem */
+		right: 4rem; /* Increased from 2.5rem */
 		z-index: 1000;
 		margin: 0;
 		background: transparent;
@@ -987,9 +936,10 @@
 	}
 
 	.mods-wrapper {
-		flex: 1;
 		position: relative;
-		overflow: hidden;
+		/* 192px being the width of the catagories + seperator */
+		width: calc(100% - 192px);
+		padding: 0 1rem;
 	}
 
 	.sort-wrapper :global(svg) {
@@ -1034,155 +984,7 @@
 		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 	}
 
-	.mod-card:hover {
-		animation: stripe-slide-up 1s linear infinite;
-		scale: 1.05;
-	}
 
-	@keyframes stripe-slide-up {
-		0% {
-			background-position: 0 0;
-		}
-		100% {
-			background-position: 0 -20px;
-		}
-	}
-
-	.mod-image {
-		position: relative;
-		height: 150px;
-	}
-
-	.mod-image img {
-		width: 100%;
-		height: 100%;
-		border-radius: 5px;
-		object-fit: cover;
-		border: 2px solid #f4eee0;
-	}
-
-	.tags {
-		position: absolute;
-		top: 7.2rem; /* Adjusted top position */
-		right: 0.35rem; /* Adjusted right position */
-		display: flex;
-		gap: 0.5rem;
-	}
-	.tag :global(svg) {
-		position: relative;
-		top: -1px; /* Adds subtle upward adjustment to the icons */
-	}
-
-	.tag {
-		display: flex;
-		align-items: center;
-		position: relative;
-		gap: 0.2rem;
-		padding: 0.15rem 0.3rem;
-		background: rgba(0, 0, 0, 0.7);
-		border-radius: 4px;
-		font-size: 0.9rem;
-		color: #f4eee0;
-	}
-	.download-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		width: calc(100% - 2rem); /* Account for parent padding */
-		padding: 0.75rem;
-		background: #56a786;
-		color: #f4eee0;
-		border: none;
-		outline: #459373 solid 2px;
-
-		border-radius: 4px;
-		font-family: "M6X11", sans-serif;
-		font-size: 1rem;
-		cursor: pointer;
-		transition: all 0.2s ease;
-		position: absolute;
-		bottom: 1rem;
-		left: 1rem;
-
-		&.installed {
-			background: #808080;
-			outline-color: #666666;
-			cursor: not-allowed;
-		}
-
-		&.installed:hover {
-			background: #808080;
-			transform: none;
-		}
-	}
-
-	.download-button:hover {
-		background: #74cca8;
-		transform: translateY(-2px);
-	}
-
-	.download-button:active {
-		transform: translateY(0);
-	}
-
-	.mod-info {
-		flex: 1;
-		padding: 0.5rem;
-		position: relative;
-		bottom: 1rem;
-	}
-
-	.mod-info h3 {
-		color: #fdcf51;
-		font-size: 1.5rem;
-		margin-bottom: 0.2rem;
-	}
-
-	.mod-info p {
-		color: #f4eee0;
-		font-size: 1rem;
-		line-height: 1.2;
-	}
-
-	.button-container {
-		display: flex;
-		gap: 0.5rem;
-		position: absolute;
-		bottom: 1rem;
-		left: 1rem;
-		width: calc(100% - 2rem);
-	}
-
-	.download-button {
-		flex: 1;
-		position: static;
-		bottom: auto;
-		left: auto;
-	}
-
-	.delete-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 0.75rem;
-		background: #c14139;
-		color: #f4eee0;
-		border: none;
-		outline: #a13029 solid 2px;
-		border-radius: 4px;
-		cursor: pointer;
-		transition: all 0.2s ease;
-	}
-
-	.delete-button:hover {
-		background: #d4524a;
-		transform: translateY(-2px);
-	}
-
-	.delete-button:active {
-		transform: translateY(0);
-	}
 
 	.loading-container {
 		display: flex;
@@ -1199,29 +1001,6 @@
 		min-width: 150px;
 	}
 
-	.spinner {
-		width: 13px;
-		height: 13px;
-		border: 2px solid #f4eee0;
-		border-bottom-color: transparent;
-		border-radius: 50%;
-		animation: spin 1s linear infinite;
-	}
-
-	@keyframes spin {
-		from {
-			transform: rotate(0deg);
-		}
-		to {
-			transform: rotate(360deg);
-		}
-	}
-
-	.download-button:disabled {
-		opacity: 0.8;
-		cursor: not-allowed;
-	}
-
 	@media (max-width: 1160px) {
 		.pagination-controls button {
 			min-width: 3rem;
@@ -1230,12 +1009,15 @@
 		}
 
 		.pagination-controls {
-			top: 0.25rem;
-			left: 35%;
+			left: 13.6rem;
 		}
 
 		.controls-container {
 			margin-bottom: 0.5rem;
+		}
+
+		.sort-controls {
+			right: 1rem;
 		}
 	}
 </style>

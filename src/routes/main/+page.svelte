@@ -9,6 +9,7 @@
 	import type { DependencyCheck, InstalledMod } from "../../stores/modStore";
 	import { currentModView } from "../../stores/modStore";
 	import { backgroundEnabled } from "../../stores/modStore";
+	import { selectedModStore, dependentsStore } from "../../stores/modStore";
 	import {
 		installationStatus,
 		showWarningPopup,
@@ -18,26 +19,27 @@
 	import UninstallDialog from "../../components/UninstallDialog.svelte";
 	import { onMount } from "svelte";
 
-	let currentSection = "mods";
+	let currentSection = $state("mods");
 	// window.addEventListener("resize", () => {
 	//     console.log(
 	//         `Window size: ${window.innerWidth} x ${window.innerHeight}`,
 	//     );
 	// });
 
-	$: if (currentSection !== "mods") {
-		// Store will retain the value but component won't show
-		// Will reappear when returning to mods section
-	}
+	$effect(() => {
+		// Cleanup
+		return () => {
+			// Cleanup
+		};
+	});
 
 	// Add these for the RequiresPopup
-	let showRequiresPopup = false;
+	let showRequiresPopup = $state(false);
 
 	let contentElement: HTMLDivElement;
 
-	let showUninstallDialog = false;
-	let selectedMod = { name: "", path: "" };
-	let dependents: string[] = [];
+	let showUninstallDialog = $state(false);
+	const selectedMod = $derived($selectedModStore);
 
 	async function handleRefresh() {
 		const installedMods: InstalledMod[] = await invoke(
@@ -50,40 +52,61 @@
 		);
 	}
 
-	function showError(error: string) {
-		addMessage(`Uninstall failed: ${error}`, "error");
+	function showError(error: unknown) {
+		addMessage(
+			`Uninstall failed: ${error instanceof Error ? error.message : String(error)}`,
+			"error",
+		);
 	}
 
-	let modRequirements = {
+	function onError(event: { detail: unknown }) {
+		showError(event.detail);
+	}
+
+	function onUninstalled(_event: {
+		detail: { modName: string; success: boolean; action: string };
+	}) {
+		handleRefresh();
+	}
+
+	let modRequirements = $state({
 		steamodded: false,
 		talisman: false,
-	};
+	});
 
 	function handleDependencyCheck(requirements: DependencyCheck) {
 		modRequirements = requirements;
 		showRequiresPopup = true;
 	}
 
+	function handleRequestUninstall(
+		event: CustomEvent<{ mod: InstalledMod; dependents: string[] }>,
+	) {
+		selectedModStore.set(event.detail.mod);
+		dependentsStore.set(event.detail.dependents);
+		showUninstallDialog = true;
+	}
+
 	onMount(() => {
 		handleRefresh();
 	});
 
-	$: {
-		if ($currentModView) {
-			// Scroll both window and content container to top
-			window.scrollTo({ top: 0, behavior: "instant" });
-			if (contentElement) {
-				contentElement.scrollTop = 0;
-			}
-			// Lock scrolling at multiple levels
-			document.body.style.overflow = "hidden";
-			document.documentElement.style.overflow = "hidden";
-		} else {
-			// Restore scrolling
-			document.body.style.overflow = "auto";
-			document.documentElement.style.overflow = "auto";
-		}
-	}
+	// $effect(() => {
+	// 	if ($currentModView) {
+	// 		// Scroll both window and content container to top
+	// 		window.scrollTo({ top: 0, behavior: "instant" });
+	// 		if (contentElement) {
+	// 			contentElement.scrollTop = 0;
+	// 		}
+	// 		// Lock scrolling at multiple levels
+	// 		document.body.style.overflow = "hidden";
+	// 		document.documentElement.style.overflow = "hidden";
+	// 	} else {
+	// 		// Restore scrolling
+	// 		document.body.style.overflow = "auto";
+	// 		document.documentElement.style.overflow = "auto";
+	// 	}
+	// });
 </script>
 
 {#if $backgroundEnabled}
@@ -99,19 +122,19 @@
 		<nav>
 			<button
 				class:active={currentSection === "mods"}
-				on:click={() => (currentSection = "mods")}
+				onclick={() => (currentSection = "mods")}
 			>
 				Mods
 			</button>
 			<button
 				class:active={currentSection === "settings"}
-				on:click={() => (currentSection = "settings")}
+				onclick={() => (currentSection = "settings")}
 			>
 				Settings
 			</button>
 			<button
 				class:active={currentSection === "about"}
-				on:click={() => (currentSection = "about")}
+				onclick={() => (currentSection = "about")}
 			>
 				About
 			</button>
@@ -120,18 +143,14 @@
 
 	<div
 		class="content"
-		class:modal-open={!!$currentModView}
+		class:modal-open={!!$currentModView && currentSection == "mods"}
 		bind:this={contentElement}
 	>
 		{#if currentSection === "mods"}
 			<Mods
 				mod={null}
 				{handleDependencyCheck}
-				on:request_uninstall={(e) => {
-					selectedMod = e.detail.mod;
-					dependents = e.detail.dependents;
-					showUninstallDialog = true;
-				}}
+				on:request_uninstall={handleRequestUninstall}
 			/>
 		{/if}
 
@@ -155,16 +174,17 @@
 		onConfirm={$showWarningPopup.onConfirm}
 		onCancel={$showWarningPopup.onCancel}
 	/>
+
 	<UninstallDialog
 		bind:show={showUninstallDialog}
-		modName={selectedMod.name}
-		modPath={selectedMod.path}
-		{dependents}
-		on:uninstalled={handleRefresh}
-		on:error={({ detail }) => showError(detail)}
+		modName={selectedMod?.name ?? ""}
+		modPath={selectedMod?.path ?? ""}
+		bind:dependents={$dependentsStore}
+		{onUninstalled}
+		{onError}
 	/>
 
-	<div class="version-text">v0.1.4</div>
+	<div class="version-text">v0.1.7</div>
 </div>
 
 <style>
@@ -222,40 +242,17 @@
 		background: rgba(193, 65, 57, 0.8);
 		border-radius: 5px;
 		backdrop-filter: blur(10px);
-		padding: 2rem;
 		margin-bottom: 2rem;
 		outline: 2px solid #f4eee0;
-		overflow-y: auto; /* Enable vertical scrolling */
+		/* overflow-y: auto; Enable vertical scrolling */
+		overflow: hidden;
 		max-height: calc(100vh - 12rem);
 		min-height: 0;
-
-		&::-webkit-scrollbar {
-			width: 10px;
-		}
-
-		&::-webkit-scrollbar-track {
-			background: transparent;
-			border-radius: 15px;
-		}
-
-		&::-webkit-scrollbar-thumb {
-			background: #f4eee0;
-			border: 2px solid rgba(193, 65, 57, 0.8);
-			border-radius: 15px;
-		}
-
-		&::-webkit-scrollbar:horizontal {
-			display: none;
-		}
-
-		&::-webkit-scrollbar-corner {
-			background-color: transparent;
-		}
 	}
 
 	.content.modal-open {
 		overflow: hidden !important;
-		scrollbar-gutter: stable;
+		/* scrollbar-gutter: stable; */
 	}
 
 	/* Add scrollbar width variable for consistency */
@@ -264,7 +261,8 @@
 	}
 
 	.content.modal-open {
-		padding-right: var(--scrollbar-width);
+		/* padding-right: var(--scrollbar-width); */
+		padding-right: 0;
 	}
 
 	.version-text {
